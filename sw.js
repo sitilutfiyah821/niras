@@ -1,6 +1,6 @@
 /* Niras — service worker: supaya bisa dipasang di HP dan dibuka tanpa internet.
    Naikkan angka VERSI setiap kali index.html diubah supaya HP mengambil versi terbaru. */
-const VERSI = 'niras-v3';
+const VERSI = 'niras-v4';
 const SHELL = ['./', 'index.html', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png'];
 

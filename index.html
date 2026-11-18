@@ -1049,6 +1049,179 @@ window.addEventListener('online', ()=>{ if(sinkAktif()) sinkron(); });
 setInterval(()=>{ if(sinkAktif() && document.visibilityState==='visible') sinkron(); }, 120000);
 
 /* =======================================================
+   3g. Catatan cepat Ofa → Niras, ditempatkan otomatis
+   Membaca isi jadwal Ofa di proyek Niras: pesanan baru, pembayaran, atau tahap
+   (brief / revisi / serah terima) untuk pekerjaan yang cocok.
+   ======================================================= */
+const KATA_STOP=new Set(['dan','yang','untuk','dari','dengan','kirim','buat','bikin','file','klien','client','baru','pesanan','order','deadline','tenggat',
+  'bayar','dibayar','transfer','lunas','pelunasan','revisi','brief','serah','terima','final','hari','ini','besok','lusa','jam','tolong','minta','proyek',
+  'pekerjaan','job','ibu','bapak','pak','kak','mas','mbak','sudah','udah','akan','mau','harus','lagi','juga','nya','the','and','via','sama','biar']);
+const KLIEN_UMUM=new Set(['cv','pt','ud','toko','rumah','kopi','batik','studio','majalah','penerbit','cafe','kafe','coffee','shop','store','official','group','jaya','abadi','indonesia','media']);
+function tokenKata(s){
+  return String(s||'').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9\s]/g,' ')
+    .split(/\s+/).filter(w=>w.length>=3 && !KATA_STOP.has(w));
+}
+function nominalDari(teks){
+  const t=String(teks||'').toLowerCase();
+  let m=t.match(/(\d+(?:[.,]\d+)?)\s*(jt|juta)\b/); if(m) return Math.round(parseFloat(m[1].replace(',','.'))*1e6);
+  m=t.match(/(\d+(?:[.,]\d+)?)\s*(rb|ribu|k)\b/); if(m) return Math.round(parseFloat(m[1].replace(',','.'))*1e3);
+  m=t.match(/rp\.?\s*([\d.]+)/); if(m) return digits(m[1]);
+  m=t.match(/\b(\d{1,3}(?:\.\d{3})+)\b/); if(m) return digits(m[1]);
+  return 0;
+}
+function bacaCatatanOfa(t){
+  const teks=[t.title||'', t.note||''].join(' '), low=teks.toLowerCase(), nominal=nominalDari(teks);
+  let jenis='tahap';
+  if(/\b(pesanan|order|orderan|job|proyek|pekerjaan|klien)\s+baru\b/.test(low)) jenis='baru';
+  else if(nominal>0 && /\b(bayar|dibayar|bayaran|transfer|tf|lunas|pelunasan|dp|uang muka|masuk|terima uang)\b/.test(low)) jenis='bayar';
+  let tahap=null;
+  if(/\brevisi\b/.test(low)) tahap='Revisi';
+  else if(/\bbrief\b/.test(low)) tahap='Brief';
+  else if(/serah\s*terima|file\s*final|kirim\s*final|hasil\s*akhir|\bfinal\b/.test(low)) tahap='Serah terima';
+  return {teks, low, jenis, tahap, nominal};
+}
+function cocokKlienOfa(low){
+  const kata=new Set(tokenKata(low));
+  return S.klien.map(kl=>{
+    let skor=0;
+    tokenKata(kl.nama).forEach(w=>{ if(kata.has(w)) skor += (KLIEN_UMUM.has(w)||w.length<4)?1:2; });
+    if(kl.pic && tokenKata(kl.pic).some(w=>w.length>=4 && kata.has(w))) skor+=1;
+    return {kl, skor};
+  }).filter(x=>x.skor>0).sort((a,b)=>b.skor-a.skor);
+}
+function cocokPekerjaanOfa(c){
+  const kata=new Set(tokenKata(c.low));
+  const kls=cocokKlienOfa(c.low);
+  const klYakin = kls.length && kls[0].skor>=2 && (kls.length===1 || kls[0].skor>kls[1].skor) ? kls[0].kl : null;
+  const kandidat=S.pekerjaan.filter(k=>AKTIF.indexOf(k.status)>=0 || k.status==='prospek').map(k=>{
+    let skor=0;
+    if(klYakin && k.klienId===klYakin.id) skor+=3;
+    else if(kls.some(x=>x.kl.id===k.klienId)) skor+=1;
+    skor += tokenKata(k.judul).filter(w=>w.length>=4 && kata.has(w)).length;
+    return {k, skor};
+  }).filter(x=>x.skor>0).sort((a,b)=>b.skor-a.skor || String(a.k.tenggat||'').localeCompare(String(b.k.tenggat||'')));
+  const yakin = !!kandidat.length && kandidat[0].skor>=2 && (kandidat.length===1 || kandidat[0].skor>kandidat[1].skor);
+  return {kandidat, yakin, klien:klYakin};
+}
+/* tebak jenis dari kata di catatan, hanya memilih jenis yang ada di daftar Anda */
+const SINONIM_JENIS=[
+  [/\b(logo|brand|branding|identitas|kop surat|kartu nama)\b/, /identitas|logo/],
+  [/\b(sampul|cover|layout|tata letak|buku)\b/, /sampul|tata letak/],
+  [/\b(feed|reels|carousel|instagram|ig|tiktok|story|konten|sosmed|medsos)\b/, /media sosial|sosial media|konten/],
+  [/\b(ilustrasi|gambar|maskot|karakter)\b/, /ilustrasi/],
+  [/\b(artikel|blog|seo|tulisan web)\b/, /artikel/],
+  [/\b(naskah|novel|sunting|editing|penyuntingan|proofread)\b/, /naskah|sunting/],
+  [/\b(caption|copy|copywriting)\b/, /caption/],
+  [/\b(iklan|ads|landing|halaman jualan|sales page)\b/, /iklan|jualan/],
+  [/\b(riset|penelitian|jurnal|skripsi|tesis|kuesioner|survei)\b/, /riset|penelitian/],
+  [/\b(input|rekap|data entry|entri|admin|administrasi|spreadsheet|excel)\b/, /input|rekap|data/]
+];
+function tebakJenisOfa(low){
+  const daftar=JC().jenis.filter(j=>!j.sembunyi);
+  for(const [pola, sasaran] of SINONIM_JENIS){
+    if(!pola.test(low)) continue;
+    const j=daftar.find(x=>sasaran.test(x.nama.toLowerCase())); if(j) return j.nama;
+  }
+  const kata=new Set(tokenKata(low));
+  const skor=daftar.map(j=>({j, s:tokenKata(j.nama).filter(w=>w.length>=4 && kata.has(w)).length})).sort((a,b)=>b.s-a.s);
+  return skor[0] && skor[0].s>0 ? skor[0].j.nama : jenisPertama();
+}
+function judulBersih(t, klien){
+  let s=' '+String(t.title||'')+' ';
+  s=s.replace(/\b(pesanan|order|orderan|job|proyek|pekerjaan|klien)\s+baru\b\s*:?/ig,' ')
+     .replace(/\b(deadline|tenggat|dl)\b/ig,' ')
+     .replace(/(rp\.?\s*[\d.]+|\d+(?:[.,]\d+)?\s*(jt|juta|rb|ribu|k)\b|\b\d{1,3}(?:\.\d{3})+\b)/ig,' ')
+     .replace(/\s+/g,' ').trim();
+  return s ? s.charAt(0).toUpperCase()+s.slice(1) : (klien? 'Pekerjaan '+klien.nama : 'Pekerjaan baru');
+}
+function catatOtomatis(entri){
+  const st=ofaState(); st.otomatis=(st.otomatis||[]); st.otomatis.unshift(Object.assign({waktu:new Date().toISOString()}, entri));
+  st.otomatis=st.otomatis.slice(0,30);
+  st.ditangani[entri.ofaId]={aksi:'otomatis', kerjaId:entri.kerjaId, waktu:new Date().toISOString()};
+}
+function prosesOtomatisOfa(){
+  if(S.contoh) return 0;
+  const kb=kotakOfa(); if(!kb.list.length) return 0;
+  const st=ofaState(); st.tanpaOtomatis=st.tanpaOtomatis||{};
+  let n=0;
+  kb.list.forEach(t=>{
+    if(st.tanpaOtomatis[t.id]) return;
+    const c=bacaCatatanOfa(t);
+    if(c.jenis==='baru'){
+      const m=cocokPekerjaanOfa(c);
+      const k=newKerja();
+      k.judul=judulBersih(t, m.klien); k.klienId=m.klien? m.klien.id : '';
+      if(t.date) k.tenggat=t.date; if(c.nominal) k.nilai=c.nominal;
+      k.jenis=tebakJenisOfa(c.low); k.catatan=t.note||''; k.dariOfa=t.id; if(t.link) k.tautan=t.link;
+      S.pekerjaan.unshift(k);
+      catatOtomatis({ofaId:t.id, aksi:'baru', kerjaId:k.id, judul:t.title,
+        ket:'Pekerjaan baru'+(m.klien?' untuk '+m.klien.nama:'')+(c.nominal?' · '+fmtRp(c.nominal):'')+' · '+k.jenis});
+      n++; return;
+    }
+    const m=cocokPekerjaanOfa(c);
+    if(!m.yakin) return;                                   /* ragu → tetap di kotak "Dari Ofa" */
+    const k=m.kandidat[0].k;
+    if(c.jenis==='bayar'){
+      const b={id:uid(), tgl:t.date||today(), jumlah:c.nominal, catatan:'Dari Ofa: '+(t.title||''), ofaId:t.id};
+      k.pembayaran=k.pembayaran||[]; k.pembayaran.unshift(b);
+      catatOtomatis({ofaId:t.id, aksi:'bayar', kerjaId:k.id, itemId:b.id, judul:t.title, ket:'Pembayaran '+fmtRp(c.nominal)});
+      n++; return;
+    }
+    const th={id:uid(), nama:(t.title||'Jadwal Ofa')+(t.date?' ('+fmtDateShort(t.date)+')':''), selesai:!!t.done, ofaId:t.id, tahap:c.tahap||null};
+    k.tahapan=k.tahapan||[]; k.tahapan.push(th);
+    let revId=null;
+    if(c.tahap==='Revisi'){
+      const r={id:uid(), tgl:t.date||today(), catatan:t.title||'', ofaId:t.id}; k.revisi=k.revisi||[]; k.revisi.push(r); revId=r.id;
+      if(k.status==='review') k.status='revisi';
+    }
+    catatOtomatis({ofaId:t.id, aksi:'tahap', kerjaId:k.id, itemId:th.id, revId, judul:t.title,
+      ket:(c.tahap?'Tahap '+c.tahap:'Tahap baru')+(revId?' · revisi tercatat':'')});
+    n++;
+  });
+  return n;
+}
+function batalkanOtomatis(ofaId){
+  const st=ofaState(); const e=(st.otomatis||[]).find(x=>x.ofaId===ofaId); if(!e) return;
+  const k=kerjaOf(e.kerjaId);
+  if(k){
+    if(e.aksi==='baru') S.pekerjaan=S.pekerjaan.filter(x=>x.id!==k.id);
+    if(e.aksi==='bayar') k.pembayaran=(k.pembayaran||[]).filter(x=>x.id!==e.itemId);
+    if(e.aksi==='tahap'){ k.tahapan=(k.tahapan||[]).filter(x=>x.id!==e.itemId); if(e.revId) k.revisi=(k.revisi||[]).filter(x=>x.id!==e.revId); }
+  }
+  st.otomatis=st.otomatis.filter(x=>x!==e);
+  delete st.ditangani[ofaId];
+  st.tanpaOtomatis=st.tanpaOtomatis||{}; st.tanpaOtomatis[ofaId]=true;   /* kembali ke kotak, tidak diproses otomatis lagi */
+}
+function htmlOtomatisOfa(){
+  const st=ofaState(), batas=Date.now()-3*86400000;
+  const list=(st.otomatis||[]).filter(e=>!e.dilihat && new Date(e.waktu).getTime()>batas);
+  if(!list.length) return '';
+  return `<div class="card noprint" style="margin-bottom:16px;border-color:#F3C9C0">
+    <div class="card-head" style="background:#FFF4F1"><h3>Baru masuk dari Ofa</h3>
+      <button class="btn btn-sm btn-ghost" data-act="ofaOtoTutupSemua">Tutup semua</button></div>
+    ${list.slice(0,6).map(e=>{ const k=kerjaOf(e.kerjaId); return `<div class="ofa-row">
+      <div style="min-width:0;flex:1">
+        <div style="font-weight:600;font-size:14px">${esc(e.judul||'')}</div>
+        <div class="hint" style="margin-top:2px">${esc(e.ket||'')}${k&&e.aksi!=='baru'?' → <a href="#kerja/'+k.id+'">'+esc(k.judul||'pekerjaan')+'</a>':''}${k&&e.aksi==='baru'?' · <a href="#kerja/'+k.id+'">buka</a>':''}</div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-sm" data-act="ofaOtoBatal" data-id="${esc(e.ofaId)}">Batalkan</button>
+        <button class="btn btn-sm btn-ghost" data-act="ofaOtoTutup" data-id="${esc(e.ofaId)}" aria-label="Tutup">✕</button>
+      </div></div>`; }).join('')}
+  </div>`;
+}
+/* kata kunci untuk proyek Niras di Ofa: nama klien & jenis pekerjaan Anda */
+function kataKunciUntukOfa(){
+  const set=new Set();
+  S.klien.forEach(kl=>tokenKata(kl.nama).forEach(w=>{ if(w.length>=4 && !KLIEN_UMUM.has(w)) set.add(w); }));
+  const umum=new Set(['tata','letak','olah','media','sosial','halaman','data','buku','visual','konten','input','virtual','assistant','asistensi']);
+  JC().jenis.filter(j=>!j.sembunyi).forEach(j=>tokenKata(j.nama).forEach(w=>{ if(w.length>=4 && !umum.has(w)) set.add(w); }));
+  JC().bidang.forEach(b=>tokenKata(b.nama).forEach(w=>{ if(w.length>=4 && !umum.has(w)) set.add(w); }));
+  ['logo','sampul','artikel','caption','iklan','riset','rekap','invoice','pesanan','revisi','brief','klien'].forEach(w=>set.add(w));
+  return [...set].slice(0,80);
+}
+
+/* =======================================================
    3d. Jembatan Niras ↔ One for All (Ofa)
    Keduanya tinggal di sitilutfiyah821.github.io, jadi berbagi penyimpanan perangkat.
    Aturannya: tiap app hanya MENULIS kuncinya sendiri dan hanya MEMBACA kunci app lain,
@@ -1087,7 +1260,9 @@ function kirimKeOfa(){
         selesai:k.status==='selesai', gantikan:k.dariOfa||null };
       o.versi=versiTenggat(o); return o;
     });
-  const isi={v:1, diperbarui:new Date().toISOString(), tenggat, centang:ofaState().centang};
+  const batal=S.pekerjaan.filter(k=>k.status==='batal').map(k=>k.id);
+  const dihapus=Object.keys(S.hapus||{});
+  const isi={v:2, diperbarui:new Date().toISOString(), tenggat, centang:ofaState().centang, batal, dihapus, kataKunci:kataKunciUntukOfa()};
   try{ localStorage.setItem(JEMBATAN_KEY, JSON.stringify(isi)); }catch(e){}
 }
 /* bawa centang dari Ofa ke tahapan yang ditempel */
@@ -1117,7 +1292,7 @@ function htmlKotakOfa(){
       <div class="ofa-row">
         <div style="min-width:0;flex:1">
           <div style="font-weight:600;font-size:14px">${t.done?'<span style="color:var(--green)">✓</span> ':''}${esc(t.title||'Tanpa judul')}</div>
-          <div class="hint" style="margin-top:2px">${esc(tglOfa(t))}${t.note?' · '+esc(String(t.note).slice(0,90)):''}</div>
+          <div class="hint" style="margin-top:2px">${esc(tglOfa(t))}${t.note?' · '+esc(String(t.note).slice(0,90)):''}${(()=>{ const m=cocokPekerjaanOfa(bacaCatatanOfa(t)); return m.kandidat[0]?' · <span style="color:var(--accent)">saran: '+esc(m.kandidat[0].k.judul||'')+'</span>':''; })()}</div>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-sm btn-pri" data-act="ofaJadikan" data-id="${esc(t.id)}">${ICON.plus} Pekerjaan baru</button>
@@ -1148,12 +1323,13 @@ function aksiOfa(act, el){
   }
   if(act==='ofaTempel'){
     const aktif=S.pekerjaan.filter(k=>AKTIF.indexOf(k.status)>=0 || k.status==='prospek');
+    const saranOfa=cocokPekerjaanOfa(bacaCatatanOfa(t)).kandidat[0];
     if(!aktif.length){ toast('Belum ada pekerjaan aktif. Pakai "Pekerjaan baru".'); return; }
     openModal({ title:'Tempel ke pekerjaan', sub:'Jadwal ini masuk ke tahapan pekerjaan yang Anda pilih. Mencentangnya di Ofa atau di Niras akan saling mengikuti.',
       body:`<div class="grid" style="gap:12px;font-size:13.5px">
         <div class="pill p-grey" style="font-size:12.5px;justify-self:start">${esc(t.title||'')} · ${esc(tglOfa(t))}</div>
         <div class="field"><label for="ofaKe">Pekerjaan</label>
-          <select id="ofaKe">${aktif.map(k=>{const kl=klienOf(k);return `<option value="${k.id}">${esc(k.judul||'Tanpa judul')}${kl?' · '+esc(kl.nama):''}</option>`;}).join('')}</select></div>
+          <select id="ofaKe">${aktif.map(k=>{const kl=klienOf(k);return `<option value="${k.id}" ${saranOfa&&saranOfa.k.id===k.id?'selected':''}>${esc(k.judul||'Tanpa judul')}${kl?' · '+esc(kl.nama):''}</option>`;}).join('')}</select></div>
       </div>`,
       ok:'Tempel',
       onOk(){
@@ -1169,12 +1345,14 @@ function aksiOfa(act, el){
 /* app lain menulis ke penyimpanan → segarkan */
 window.addEventListener('storage', e=>{
   if(e.key!==OFA_KEY) return;
-  if(tarikDariOfa()) save();
+  const a=tarikDariOfa(), b=prosesOtomatisOfa();
+  if(a||b) save();
   if(route==='beranda' || route==='kerja') render();
 });
 document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState!=='visible') return;
-  if(tarikDariOfa()) save();
+  const a=tarikDariOfa(), b=prosesOtomatisOfa();
+  if(a||b) save();
   if(route==='beranda' || route==='kerja') render();
 });
 
@@ -1826,6 +2004,7 @@ function viewBeranda(v){
       <button class="btn btn-sm" data-act="hapusContoh">${ICON.trash} Hapus data contoh</button>
     </div>`:''}
 
+    ${htmlOtomatisOfa()}
     ${htmlKotakOfa()}
 
     ${jalan?`<div class="card card-pad noprint" style="display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:16px;background:var(--accent-tint);border-color:#CFE0DB">
@@ -3467,6 +3646,9 @@ document.addEventListener('click',function(e){
 
   /* ---- jadwal dari Ofa ---- */
   if(act==='ofaJadikan'||act==='ofaTempel'||act==='ofaAbaikan'){ aksiOfa(act, el); return; }
+  if(act==='ofaOtoBatal'){ batalkanOtomatis(id); save(); render(); toast('Dibatalkan. Jadwalnya kembali ke kotak "Dari Ofa".'); return; }
+  if(act==='ofaOtoTutup'){ const e2=(ofaState().otomatis||[]).find(x=>x.ofaId===id); if(e2) e2.dilihat=true; save(); render(); return; }
+  if(act==='ofaOtoTutupSemua'){ (ofaState().otomatis||[]).forEach(x=>x.dilihat=true); save(); render(); return; }
 
   /* ---- jenis pekerjaan & kalender ---- */
   if(route==='jenis' && aksiJenis(act, el)) return;
@@ -3873,7 +4055,7 @@ document.addEventListener('keydown',function(e){
 load();
 try{ tandaiPerubahan(true); }catch(e){}
 if(!location.hash) location.hash='#beranda';
-try{ if(tarikDariOfa()) save(); else kirimKeOfa(); }catch(e){}
+try{ const a=tarikDariOfa(), b=prosesOtomatisOfa(); if(a||b) save(); else kirimKeOfa(); }catch(e){}
 try{ perbaruiStatusSink(); if(sinkAktif()) sinkron(); }catch(e){}
 /* pasang sebagai aplikasi (hanya di situs GitHub Pages, bukan di dalam Claude) */
 if('serviceWorker' in navigator && /github\.io$/.test(location.hostname)){
