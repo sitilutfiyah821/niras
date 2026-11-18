@@ -113,6 +113,7 @@ a:hover{text-decoration:underline}
 .g3{grid-template-columns:repeat(3,1fr)}
 .g2{grid-template-columns:repeat(2,1fr)}
 .g-main{grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);align-items:start}
+#footSink.galat{color:var(--danger)}
 .ofa-row{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:12px 18px;border-top:1px solid var(--line)}
 .ofa-row:first-child{border-top:0}
 .g-jenis{grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr);align-items:start}
@@ -410,7 +411,7 @@ td.r,th.r{text-align:right}
     </div>
     <nav class="nav" id="nav"></nav>
     <div class="side-foot">
-      <span class="dot"></span>Tersimpan di perangkat ini<br>
+      <span class="dot"></span><span id="footSink">Tersimpan di perangkat ini</span><br>
       <span id="footCount">—</span>
     </div>
   </aside>
@@ -824,6 +825,230 @@ async function aksiBagi(act){
 }
 
 /* =======================================================
+   3f. Sinkron laptop ↔ HP lewat GitHub Gist (terenkripsi)
+   - Data dikunci dengan AES-GCM; kuncinya diturunkan dari kata sandi sinkron (PBKDF2).
+   - Token GitHub & kata sandi hanya disimpan di perangkat ini (kunci terpisah), tidak ikut tersinkron.
+   - Penggabungan per catatan: tiap klien/pekerjaan/dokumen punya cap waktu _u; yang terbaru menang.
+   ======================================================= */
+const SINK_KEY='niras.sinkron.v1', SINK_BERKAS='niras-sinkron.json';
+const KOLEKSI=['klien','pekerjaan','dokumen'], OBJEK=['profil','jenisCfg','urut','ofa'];
+let sink=(()=>{ try{ return JSON.parse(localStorage.getItem(SINK_KEY)||'null')||{}; }catch(e){ return {}; } })();
+function simpanSink(){ try{ localStorage.setItem(SINK_KEY, JSON.stringify(sink)); }catch(e){} }
+const sinkAktif = () => !!(sink.token && sink.sandi && sink.gistId);
+const sinkBisa = () => location.protocol==='https:' && !!(window.crypto && crypto.subtle) && !window.claude;
+
+/* ---- jejak perubahan: memberi cap waktu pada catatan yang berubah ---- */
+let jejak=null;
+function tandaiPerubahan(awal){
+  const now=Date.now(), baru=new Map();
+  S.hapus=S.hapus||{}; S._u=S._u||{};
+  KOLEKSI.forEach(col=>(S[col]||[]).forEach(r=>{
+    const salin=Object.assign({},r); delete salin._u;
+    const j=JSON.stringify(salin), key=col+':'+r.id; baru.set(key,j);
+    if(!awal && jejak && jejak.get(key)!==j) r._u=now;
+    else if(!r._u) r._u=(awal||!jejak)?1:now;
+  }));
+  OBJEK.forEach(o=>{
+    const j=JSON.stringify(S[o]===undefined?null:S[o]); baru.set('o:'+o,j);
+    if(!awal && jejak && jejak.get('o:'+o)!==j) S._u[o]=now;
+    else if(!S._u[o]) S._u[o]=1;
+  });
+  if(!awal && jejak) jejak.forEach((j,key)=>{ if(!key.startsWith('o:') && !baru.has(key)) S.hapus[key.slice(key.indexOf(':')+1)]=now; });
+  jejak=baru;
+}
+function gabungData(L, R, utamakanR){
+  if(L.contoh && !R.contoh) return JSON.parse(JSON.stringify(R));
+  if(R.contoh && !L.contoh) return JSON.parse(JSON.stringify(L));
+  const out=JSON.parse(JSON.stringify(L));
+  const hapus=Object.assign({}, R.hapus||{});
+  Object.entries(L.hapus||{}).forEach(([k,t])=>{ if(!hapus[k]||hapus[k]<t) hapus[k]=t; });
+  out.hapus=hapus;
+  KOLEKSI.forEach(col=>{
+    const m=new Map();
+    (L[col]||[]).forEach(r=>m.set(r.id,r));
+    (R[col]||[]).forEach(r=>{ const a=m.get(r.id); if(!a || (r._u||0)>(a._u||0)) m.set(r.id, JSON.parse(JSON.stringify(r))); });
+    out[col]=[...m.values()].filter(r=>!(hapus[r.id] && hapus[r.id]>=(r._u||0)));
+  });
+  out._u=Object.assign({}, L._u||{});
+  OBJEK.forEach(o=>{
+    const tl=(L._u||{})[o]||0, tr=(R._u||{})[o]||0;
+    if(R[o]!==undefined && (utamakanR || tr>tl)){ out[o]=JSON.parse(JSON.stringify(R[o])); out._u[o]=Math.max(tr,tl); }
+  });
+  out.contoh=!!(L.contoh && R.contoh);
+  return out;
+}
+
+/* ---- enkripsi ---- */
+const b64 = buf => { let s=''; new Uint8Array(buf).forEach(b=>s+=String.fromCharCode(b)); return btoa(s); };
+const unb64 = t => Uint8Array.from(atob(t), c=>c.charCodeAt(0));
+const kunciCache={};
+async function kunciDari(sandi, salt){
+  const id=b64(salt)+'|'+sandi.length;
+  if(kunciCache[id] && kunciCache[id].s===sandi) return kunciCache[id].k;
+  const dasar=await crypto.subtle.importKey('raw', new TextEncoder().encode(sandi), 'PBKDF2', false, ['deriveKey']);
+  const k=await crypto.subtle.deriveKey({name:'PBKDF2', salt, iterations:250000, hash:'SHA-256'}, dasar, {name:'AES-GCM', length:256}, false, ['encrypt','decrypt']);
+  kunciCache[id]={s:sandi,k}; return k;
+}
+async function kunciData(obj){
+  if(!sink.salt) sink.salt=b64(crypto.getRandomValues(new Uint8Array(16)));
+  const salt=unb64(sink.salt), iv=crypto.getRandomValues(new Uint8Array(12));
+  const k=await kunciDari(sink.sandi, salt);
+  const ct=await crypto.subtle.encrypt({name:'AES-GCM', iv}, k, new TextEncoder().encode(JSON.stringify(obj)));
+  return {v:1, app:'niras', alg:'AES-GCM-256 / PBKDF2-SHA256-250000', salt:sink.salt, iv:b64(iv), data:b64(ct), diperbarui:new Date().toISOString()};
+}
+async function bukaData(p, sandi){
+  const k=await kunciDari(sandi||sink.sandi, unb64(p.salt));
+  try{
+    const pt=await crypto.subtle.decrypt({name:'AES-GCM', iv:unb64(p.iv)}, k, unb64(p.data));
+    return JSON.parse(new TextDecoder().decode(pt));
+  }catch(e){ const er=new Error('sandi'); er.sandi=true; throw er; }
+}
+
+/* ---- GitHub ---- */
+async function gh(path, opt, token){
+  opt=opt||{};
+  const r=await fetch('https://api.github.com'+path, {method:opt.method||'GET', body:opt.body,
+    headers:Object.assign({'Authorization':'Bearer '+(token||sink.token), 'Accept':'application/vnd.github+json'}, opt.body?{'Content-Type':'application/json'}:{}) , cache:'no-store'});
+  if(!r.ok){ const e=new Error('gh '+r.status); e.status=r.status; throw e; }
+  return r.status===204? null : r.json();
+}
+async function ambilGist(){
+  const g=await gh('/gists/'+sink.gistId);
+  const f=g.files && g.files[SINK_BERKAS]; if(!f) return null;
+  let c=f.content; if(f.truncated) c=await fetch(f.raw_url,{cache:'no-store'}).then(r=>r.text());
+  try{ return JSON.parse(c); }catch(e){ return null; }
+}
+function pesanGalatSink(e){
+  if(e && e.sandi) return 'Kata sandi sinkron tidak cocok dengan data online.';
+  if(e && (e.status===401||e.status===403)) return 'Token GitHub ditolak atau kedaluwarsa. Sambungkan ulang dengan token baru.';
+  if(e && e.status===404) return 'Catatan sinkron di GitHub tidak ditemukan. Sambungkan ulang.';
+  if(!navigator.onLine) return 'Sedang luring. Sinkron dilanjutkan saat ada internet.';
+  return 'Sinkron gagal. Akan dicoba lagi.';
+}
+
+/* ---- jalannya sinkron ---- */
+let sinkSedang=false, sinkLagi=false, sinkTunda=null;
+const sedangMengetik = () => { const a=document.activeElement; return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.closest('#view, #modal')); };
+function terapkanGabungan(G){
+  S=G; jejak=null; tandaiPerubahan(true);
+  try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
+  try{ kirimKeOfa(); }catch(e){}
+  renderFoot(); render();
+}
+async function sinkron(opsi){
+  opsi=opsi||{};
+  if(!sinkAktif() || !sinkBisa()) return;
+  if(sinkSedang){ sinkLagi=true; return; }
+  sinkSedang=true; sink.galat=''; perbaruiStatusSink('jalan');
+  try{
+    const p=await ambilGist();
+    const R = p && p.data ? await bukaData(p) : null;
+    const G = R ? gabungData(S, R, !!opsi.pertama) : S;
+    const gs=JSON.stringify(G);
+    if(R && gs!==JSON.stringify(S)){
+      if(sedangMengetik() && !opsi.paksa) sinkLagi=true;   /* jangan ganggu yang sedang mengetik */
+      else terapkanGabungan(G);
+    }
+    if(!R || gs!==JSON.stringify(R)){
+      await gh('/gists/'+sink.gistId, {method:'PATCH', body:JSON.stringify({files:{[SINK_BERKAS]:{content:JSON.stringify(await kunciData(G))}}})});
+    }
+    sink.terakhir=new Date().toISOString(); simpanSink();
+  }catch(e){
+    sink.galat=pesanGalatSink(e); simpanSink();
+    if(opsi.lapor) toast(sink.galat);
+  }finally{
+    sinkSedang=false; perbaruiStatusSink();
+    if(sinkLagi){ sinkLagi=false; jadwalkanSinkron(4000); }
+  }
+}
+function jadwalkanSinkron(ms){
+  if(!sinkAktif()) return;
+  clearTimeout(sinkTunda); sinkTunda=setTimeout(()=>sinkron(), ms==null?2500:ms);
+}
+async function sambungkanSinkron(token, sandi){
+  token=String(token||'').trim(); sandi=String(sandi||'');
+  if(!token) throw Object.assign(new Error('x'),{pesan:'Tempel token GitHub dulu.'});
+  if(sandi.length<6) throw Object.assign(new Error('x'),{pesan:'Kata sandi sinkron minimal 6 karakter.'});
+  let user;
+  try{ user=await gh('/user',{},token); }
+  catch(e){ throw Object.assign(new Error('x'),{pesan: e.status===401?'Token tidak dikenali GitHub. Periksa lagi salinannya.':'Tidak bisa menghubungi GitHub. Periksa internet.'}); }
+  /* cari catatan sinkron yang sudah ada */
+  let gist=null;
+  for(let hal=1; hal<=5 && !gist; hal++){
+    let daftar;
+    try{ daftar=await gh('/gists?per_page=100&page='+hal,{},token); }
+    catch(e){ throw Object.assign(new Error('x'),{pesan: e.status===403||e.status===404?'Token ini belum punya izin "gist". Buat token baru dengan centang gist.':'Gagal membaca daftar Gist.'}); }
+    gist=(daftar||[]).find(g=>g.files && g.files[SINK_BERKAS]);
+    if(!daftar || daftar.length<100) break;
+  }
+  const lama={token:sink.token, sandi:sink.sandi, gistId:sink.gistId, salt:sink.salt};
+  sink.token=token; sink.sandi=sandi; sink.login=user.login;
+  try{
+    if(gist){
+      sink.gistId=gist.id;
+      const p=await ambilGist();
+      if(p && p.data){ await bukaData(p, sandi); sink.salt=p.salt; }
+      simpanSink();
+      await sinkron({pertama:true, paksa:true, lapor:true});
+      return 'lama';
+    }
+    sink.salt=null;
+    const isi=await kunciData(S);
+    const g=await gh('/gists',{method:'POST', body:JSON.stringify({description:'Niras — data sinkron (terenkripsi, jangan diubah)', public:false, files:{[SINK_BERKAS]:{content:JSON.stringify(isi)}}})});
+    sink.gistId=g.id; sink.terakhir=new Date().toISOString(); simpanSink();
+    return 'baru';
+  }catch(e){
+    Object.assign(sink, lama); simpanSink();
+    if(e && e.sandi) throw Object.assign(new Error('x'),{pesan:'Kata sandi ini tidak bisa membuka data Niras yang sudah ada di GitHub. Pakai kata sandi yang sama dengan perangkat pertama.'});
+    if(e && e.pesan) throw e;
+    throw Object.assign(new Error('x'),{pesan:'Gagal menyambungkan: '+pesanGalatSink(e)});
+  }
+}
+function putuskanSinkron(){ sink={}; simpanSink(); perbaruiStatusSink(); }
+function jamPendek(iso){ try{ const d=new Date(iso); return (isoLokal(d)===today()?'':fmtDateShort(isoLokal(d))+' ')+String(d.getHours()).padStart(2,'0')+'.'+String(d.getMinutes()).padStart(2,'0'); }catch(e){ return ''; } }
+function teksStatusSink(keadaan){
+  if(!sinkAktif()) return '';
+  if(keadaan==='jalan') return 'Menyinkronkan…';
+  if(sink.galat) return sink.galat;
+  return sink.terakhir? 'Tersinkron '+jamPendek(sink.terakhir) : 'Belum sinkron';
+}
+function perbaruiStatusSink(keadaan){
+  const el=document.getElementById('sinkStatus'); if(el) el.textContent=teksStatusSink(keadaan);
+  const f=document.getElementById('footSink'); if(f){ f.textContent = sinkAktif()? teksStatusSink(keadaan) : 'Tersimpan di perangkat ini'; f.classList.toggle('galat', !!(sinkAktif()&&sink.galat)); }
+}
+function htmlKartuSinkron(){
+  if(!sinkBisa()) return `<div class="card"><div class="card-head"><h3>Sinkron laptop ↔ HP</h3></div>
+    <div class="card-pad hint">Sinkron hanya berjalan di situs Niras Anda: <a href="https://sitilutfiyah821.github.io/niras/#pengaturan" target="_blank" rel="noopener">sitilutfiyah821.github.io/niras</a>.</div></div>`;
+  if(sinkAktif()) return `<div class="card">
+    <div class="card-head"><h3>Sinkron laptop ↔ HP</h3><span class="pill p-green">Tersambung</span></div>
+    <div class="card-pad" style="display:flex;flex-direction:column;gap:11px;font-size:13px">
+      <div>Akun GitHub <strong>@${esc(sink.login||'')}</strong> · <span id="sinkStatus">${esc(teksStatusSink())}</span></div>
+      <div class="hint">Data dikunci dengan kata sandi sinkron sebelum dikirim, lalu disimpan di Gist rahasia di akun GitHub Anda. Perubahan dikirim otomatis beberapa detik setelah Anda menyunting, dan diambil setiap kali Niras dibuka.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-sm btn-pri" data-act="sinkSekarang">Sinkronkan sekarang</button>
+        <button class="btn btn-sm btn-ghost" data-act="sinkPutus" style="color:var(--danger)">Putuskan di perangkat ini</button>
+      </div>
+    </div></div>`;
+  return `<div class="card">
+    <div class="card-head"><h3>Sinkron laptop ↔ HP</h3><span class="pill p-grey">Belum tersambung</span></div>
+    <div class="card-pad" style="display:flex;flex-direction:column;gap:12px;font-size:13px">
+      <ol style="margin:0;padding-left:18px;line-height:1.65;color:var(--ink-2)">
+        <li><a href="https://github.com/settings/tokens/new?scopes=gist&description=Niras%20sinkron" target="_blank" rel="noopener"><strong>Buat token GitHub</strong></a>: centang hanya <strong>gist</strong>, pilih masa berlaku <em>No expiration</em> atau 1 tahun, klik <em>Generate token</em>, lalu salin.</li>
+        <li>Tempel token di bawah dan buat <strong>kata sandi sinkron</strong>. Pakai token & kata sandi yang sama di laptop dan HP.</li>
+      </ol>
+      <div class="grid g2" style="gap:10px">
+        <div class="field"><label for="sinkToken">Token GitHub</label><input type="password" id="sinkToken" autocomplete="off" placeholder="ghp_…"></div>
+        <div class="field"><label for="sinkSandi">Kata sandi sinkron</label><input type="password" id="sinkSandi" autocomplete="new-password" placeholder="minimal 6 karakter"></div>
+      </div>
+      <div class="hint">Simpan kata sandinya baik-baik. Kalau lupa, salinan online tidak bisa dibuka — data di perangkat tetap aman.</div>
+      <div><button class="btn btn-pri" data-act="sinkSambung">Sambungkan</button></div>
+    </div></div>`;
+}
+document.addEventListener('visibilitychange', ()=>{ if(sinkAktif()) sinkron(); });
+window.addEventListener('online', ()=>{ if(sinkAktif()) sinkron(); });
+setInterval(()=>{ if(sinkAktif() && document.visibilityState==='visible') sinkron(); }, 120000);
+
+/* =======================================================
    3d. Jembatan Niras ↔ One for All (Ofa)
    Keduanya tinggal di sitilutfiyah821.github.io, jadi berbagi penyimpanan perangkat.
    Aturannya: tiap app hanya MENULIS kuncinya sendiri dan hanya MEMBACA kunci app lain,
@@ -998,9 +1223,11 @@ function load(){
   seed();
 }
 function save(){
+  try{ tandaiPerubahan(); }catch(e){}
   try{ localStorage.setItem(KEY,JSON.stringify(S)); }
   catch(e){ toast('Gagal menyimpan ke perangkat — ruang penyimpanan penuh atau diblokir.'); }
   try{ kirimKeOfa(); }catch(e){}
+  try{ jadwalkanSinkron(); }catch(e){}
   renderFoot();
 }
 function seed(){
@@ -2842,6 +3069,8 @@ function viewPengaturan(v){
           </div>
         </div>
 
+        ${htmlKartuSinkron()}
+
         <div class="card">
           <div class="card-head"><h3>Google Calendar</h3>${KEMAMPUAN.mcp?'<span class="pill p-green">Bisa tersambung</span>':''}</div>
           <div class="card-pad" style="display:flex;flex-direction:column;gap:11px;font-size:13px">
@@ -2890,8 +3119,9 @@ function viewPengaturan(v){
         <div class="card">
           <div class="card-head"><h3>Data Anda</h3></div>
           <div class="card-pad" style="font-size:13px;color:var(--ink-2);line-height:1.55">
-            Semua isi Niras disimpan di penyimpanan browser perangkat ini. Tidak ada yang dikirim ke server, dan tidak ada yang bisa dilihat orang lain —
-            tapi juga <strong>tidak otomatis tercadang</strong>. Bersihkan data browser, dan isinya hilang.
+            ${sinkAktif()
+              ? `Isi Niras disimpan di perangkat ini dan <strong>disalin otomatis</strong> ke Gist rahasia di GitHub Anda dalam keadaan terkunci kata sandi. Perangkat lain yang tersambung ikut menerima perubahan.`
+              : `Semua isi Niras disimpan di penyimpanan browser perangkat ini dan <strong>belum tercadang otomatis</strong>. Bersihkan data browser, dan isinya hilang. Nyalakan <strong>Sinkron laptop ↔ HP</strong> di kolom kiri supaya ada salinan online.`}
             <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px">
               <button class="btn" data-act="cadangSalin">${ICON.copy} Salin cadangan (JSON)</button>
               <button class="btn" data-act="cadangPulih">${ICON.arrow} Pulihkan dari cadangan</button>
@@ -3218,6 +3448,22 @@ document.addEventListener('click',function(e){
   if(act==='modalBg'){ if(e.target===el) closeModal(); return; }
   if(act==='modalTutup'){ closeModal(); return; }
   if(act==='modalOk'){ const fn=modalOk; if(fn && fn()!==false) closeModal(); return; }
+
+  /* ---- sinkron laptop ↔ HP ---- */
+  if(act==='sinkSambung'){
+    const tk=(document.getElementById('sinkToken')||{}).value, sd=(document.getElementById('sinkSandi')||{}).value;
+    el.disabled=true; el.textContent='Menyambungkan…';
+    sambungkanSinkron(tk, sd).then(h=>{
+      render(); toast(h==='baru'? 'Tersambung. Data perangkat ini sudah tersimpan online — sambungkan perangkat lain dengan token & kata sandi yang sama.' : 'Tersambung. Data dari perangkat lain sudah digabung ke sini.');
+    }).catch(e=>{ el.disabled=false; el.textContent='Sambungkan'; toast((e&&e.pesan)||'Gagal menyambungkan.'); });
+    return;
+  }
+  if(act==='sinkSekarang'){ sinkron({lapor:true, paksa:true}).then(()=>{ if(!sink.galat) toast('Tersinkron.'); }); return; }
+  if(act==='sinkPutus'){
+    openModal({ title:'Putuskan sinkron di perangkat ini?', sub:'Data di perangkat ini dan salinan online tetap ada. Perangkat ini hanya berhenti mengirim dan mengambil perubahan.', body:'', ok:'Putuskan', danger:true,
+      onOk(){ putuskanSinkron(); render(); toast('Sinkron diputus di perangkat ini.'); } });
+    return;
+  }
 
   /* ---- jadwal dari Ofa ---- */
   if(act==='ofaJadikan'||act==='ofaTempel'||act==='ofaAbaikan'){ aksiOfa(act, el); return; }
@@ -3625,8 +3871,10 @@ document.addEventListener('keydown',function(e){
    16. Jalan
    ======================================================= */
 load();
+try{ tandaiPerubahan(true); }catch(e){}
 if(!location.hash) location.hash='#beranda';
 try{ if(tarikDariOfa()) save(); else kirimKeOfa(); }catch(e){}
+try{ perbaruiStatusSink(); if(sinkAktif()) sinkron(); }catch(e){}
 /* pasang sebagai aplikasi (hanya di situs GitHub Pages, bukan di dalam Claude) */
 if('serviceWorker' in navigator && /github\.io$/.test(location.hostname)){
   window.addEventListener('load', ()=>{ navigator.serviceWorker.register('sw.js').catch(()=>{}); });
