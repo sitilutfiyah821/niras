@@ -128,7 +128,12 @@ a:hover{text-decoration:underline}
 .jgeser .btn:disabled{opacity:.25}
 .jbid{display:flex;align-items:center;gap:10px;padding:10px 16px 10px 10px;border-top:1px solid var(--line);background:#FDFCFA}
 .jwarna{width:10px;height:10px;border-radius:3px;flex:0 0 auto}
-.jbnama{border:1px solid transparent !important;background:transparent !important;font-size:12px !important;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:4px 6px !important;width:auto;min-width:0;max-width:220px;box-shadow:none !important}
+.jwarna-btn{width:16px;height:16px;border:0;padding:0;cursor:pointer;border-radius:4px}
+.bagi-tombol{display:flex;gap:8px;flex-wrap:wrap}
+.bagi-pdf{display:flex;flex-direction:column;gap:6px;padding:12px;border-radius:10px;background:var(--accent-tint)}
+.rek-row{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.1fr) minmax(0,1.2fr) auto auto;gap:8px;align-items:center}
+@media (max-width:700px){.rek-row{grid-template-columns:1fr 1fr}}
+.jbnama{border:1px dashed var(--line-2) !important;background:#fff !important;font-size:12px !important;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:4px 6px !important;width:auto;min-width:0;max-width:220px;box-shadow:none !important}
 .jbnama:hover{border-color:var(--line-2) !important}
 .jbnama:focus{border-color:var(--accent) !important;background:#fff !important;text-transform:none;letter-spacing:0}
 .jtambah{padding:7px 16px 11px 74px;border-top:1px solid var(--line)}
@@ -556,19 +561,36 @@ const ASAL = ['Instagram','TikTok','LinkedIn','Jobstreet','Relasi / rekomendasi'
    ======================================================= */
 const WARNA_BIDANG = ['#0F5F4E','#7A3B2E','#223E7A','#6B4A8E','#8A6A12','#2C5A42','#9E4A6B','#4A5560'];
 const STRUKTUR_BAWAAN = [
-  ['Desain',     ['Sampul & tata letak buku','Konten media sosial','Identitas visual & logo','Ilustrasi']],
-  ['Menulis',    ['Artikel web','Naskah & penyuntingan buku']],
-  ['Copywriting',['Caption & naskah konten','Iklan & halaman jualan']],
-  ['Penelitian', ['Asistensi riset','Olah data penelitian']],
-  ['Data entry', ['Input & rekap data']]
+  ['Desain',       ['Sampul & tata letak buku','Identitas visual & logo','Ilustrasi']],
+  ['Sosial Media', ['Konten media sosial']],
+  ['Menulis',      ['Artikel web','Naskah & penyuntingan buku']],
+  ['Copywriting',  ['Caption & naskah konten','Iklan & halaman jualan']],
+  ['Penelitian',   ['Asistensi riset','Olah data penelitian']],
+  ['Virtual Assistant', ['Input & rekap data']]
 ];
 /* untuk memindahkan daftar lama (satu tingkat) ke bidang yang cocok */
-const BIDANG_LAMA = {'Desain grafis':'Desain','Ilustrasi':'Desain','Media sosial':'Desain','Situs web':'Desain',
+const BIDANG_LAMA = {'Desain grafis':'Desain','Ilustrasi':'Desain','Media sosial':'Sosial Media','Konten media sosial':'Sosial Media','Situs web':'Desain',
   'Copywriting':'Copywriting','Penulisan artikel':'Menulis'};
 const LAINNYA='Lainnya';
 
+function migrasiBidang2(c){
+  if(!c || c.rev>=2) return false;
+  const dataEntry=c.bidang.find(b=>/^data\s*entry$/i.test(b.nama));
+  if(dataEntry) dataEntry.nama='Virtual Assistant';
+  const sos=c.jenis.filter(j=>/media sosial|sosial media/i.test(j.nama));
+  if(sos.length){
+    let b=c.bidang.find(x=>/^sosial media$/i.test(x.nama));
+    if(!b){
+      b={id:uid(), nama:'Sosial Media', warna:'#9E4A6B'};
+      const iDesain=c.bidang.findIndex(x=>/^desain$/i.test(x.nama));
+      c.bidang.splice(iDesain>=0?iDesain+1:c.bidang.length, 0, b);
+    }
+    sos.forEach(j=>{ j.bidangId=b.id; });
+  }
+  c.rev=2; return true;
+}
 function strukturBaru(){
-  const c={bidang:[], jenis:[], datar:false};
+  const c={bidang:[], jenis:[], datar:false, rev:2};
   STRUKTUR_BAWAAN.forEach((b,i)=>{
     const bd={id:uid(), nama:b[0], warna:WARNA_BIDANG[i%WARNA_BIDANG.length]};
     c.bidang.push(bd);
@@ -592,7 +614,7 @@ function strukturDariLama(namaLama, kerja){
     c.jenis.push({id:uid(), nama:n, bidangId:b?b.id:'', tarif:0, sembunyi:false});
   });
   /* bidang baru yang diminta: beri satu jenis awal supaya langsung bisa dipilih */
-  STRUKTUR_BAWAAN.slice(3).forEach(b=>{
+  STRUKTUR_BAWAAN.slice(4).forEach(b=>{
     const bd=bidangNama(b[0]);
     if(!c.jenis.some(j=>j.bidangId===bd.id)) b[1].forEach(n=>c.jenis.push({id:uid(), nama:n, bidangId:bd.id, tarif:0, sembunyi:false}));
   });
@@ -654,6 +676,151 @@ function pindahkanPekerjaan(dari, ke){
   S.pekerjaan.forEach(k=>{ if((k.jenis||LAINNYA)===dari){ k.jenis=ke; n++; } });
   if(kfilter.jenis===dari) kfilter.jenis='semua';
   return n;
+}
+
+/* =======================================================
+   3e. Rekening (bisa lebih dari satu) & berbagi dokumen
+   ======================================================= */
+function daftarRekening(){
+  const p=S.profil;
+  if(!Array.isArray(p.rekeningList)){
+    p.rekeningList = (p.bank||p.rekening) ? [{id:uid(), bank:p.bank||'', nomor:p.rekening||'', atasNama:p.atasNama||'', bawaan:true}] : [];
+  }
+  return p.rekeningList;
+}
+function rekeningDok(d){
+  const semua=daftarRekening().filter(r=>r.bank||r.nomor);
+  if(Array.isArray(d.rekeningIds)) return semua.filter(r=>d.rekeningIds.indexOf(r.id)>=0);
+  const baw=semua.filter(r=>r.bawaan); return baw.length? baw : semua.slice(0,1);
+}
+const teksRek = r => [r.bank, r.nomor, r.atasNama?'a.n. '+r.atasNama:''].filter(Boolean).join(' ');
+
+/* nomor HP Indonesia → format wa.me (62…) */
+function nomorWA(t){
+  let n=String(t||'').replace(/[^\d+]/g,'');
+  if(n.startsWith('+')) n=n.slice(1);
+  if(n.startsWith('0')) n='62'+n.slice(1);
+  else if(n.startsWith('8')) n='62'+n;
+  return n.length>=9? n : '';
+}
+function pesanDok(d, lengkap){
+  if(lengkap) return docText(d);
+  const p=S.profil, k=klienOf(d), t=TIPE[d.tipe], h=hitung(d);
+  const L=[];
+  L.push('Halo'+(k&&k.pic?' '+k.pic:(k?' '+k.nama:''))+',');
+  L.push('');
+  const nilai = d.tipe==='kwitansi' ? (h.dp>0?h.dp:h.total) : (h.dp?h.sisa:h.total);
+  L.push('Berikut '+t.label.toLowerCase()+' '+d.nomor+(d.judul?' untuk '+d.judul:'')+'.');
+  if(d.tipe==='invoice'){
+    L.push('Total tagihan: '+fmtRp(nilai)+(d.jatuhTempo?', jatuh tempo '+fmtDate(d.jatuhTempo):'')+'.');
+    const rk=rekeningDok(d);
+    if(rk.length){ L.push(''); L.push('Pembayaran dapat ditransfer ke:'); rk.forEach(r=>L.push('• '+teksRek(r))); }
+  } else if(d.tipe==='penawaran'){
+    L.push('Nilai penawaran: '+fmtRp(h.total)+(d.jatuhTempo?', berlaku sampai '+fmtDate(d.jatuhTempo):'')+'.');
+  } else if(d.tipe==='kwitansi'){
+    L.push('Pembayaran sebesar '+fmtRp(nilai)+' sudah kami terima. Terima kasih.');
+  }
+  L.push(''); L.push('Dokumen lengkapnya terlampir dalam PDF.');
+  L.push(''); L.push('Terima kasih,'); L.push(p.penandatangan||p.nama||'');
+  return L.join('\n');
+}
+
+/* PDF dari pratinjau dokumen — pustaka dimuat saat dibutuhkan saja */
+function muatSkrip(src){
+  return new Promise((ok,gagal)=>{
+    if(document.querySelector('script[src="'+src+'"]')){ ok(); return; }
+    const s=document.createElement('script'); s.src=src; s.onload=()=>ok(); s.onerror=()=>gagal(new Error('muat'));
+    document.head.appendChild(s);
+  });
+}
+async function buatPDF(d){
+  await muatSkrip('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+  await muatSkrip('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+  const el=document.querySelector('#sheet .sheet'); if(!el) throw new Error('lembar');
+  const kanvas=await window.html2canvas(el,{scale:2, backgroundColor:'#ffffff', useCORS:true, windowWidth:900});
+  const pdf=new window.jspdf.jsPDF({unit:'mm', format:'a4', orientation:'portrait'});
+  const W=210, H=297, m=10, lebar=W-2*m;
+  const tinggiPer = (lebar/kanvas.width)*kanvas.height;
+  if(tinggiPer <= H-2*m){
+    pdf.addImage(kanvas.toDataURL('image/jpeg',0.92),'JPEG',m,m,lebar,tinggiPer);
+  } else {
+    /* dokumen panjang: potong per halaman */
+    const pxPerHal=Math.floor(kanvas.width*(H-2*m)/lebar);
+    for(let y=0, i=0; y<kanvas.height; y+=pxPerHal, i++){
+      const c=document.createElement('canvas'); c.width=kanvas.width; c.height=Math.min(pxPerHal, kanvas.height-y);
+      c.getContext('2d').drawImage(kanvas,0,y,c.width,c.height,0,0,c.width,c.height);
+      if(i) pdf.addPage();
+      pdf.addImage(c.toDataURL('image/jpeg',0.92),'JPEG',m,m,lebar,(lebar/c.width)*c.height);
+    }
+  }
+  const nama=(TIPE[d.tipe].label+' '+d.nomor).replace(/[\\/:*?"<>|]+/g,'-')+'.pdf';
+  return new File([pdf.output('blob')], nama, {type:'application/pdf'});
+}
+function tandaiTerkirim(d){
+  if(d.status==='draf' && (d.tipe==='invoice'||d.tipe==='penawaran')){ d.status='terkirim'; save(); }
+  else if(d.status==='draf' && d.tipe==='kwitansi'){ d.status='terbit'; save(); }
+}
+function modalBagikan(d){
+  const k=klienOf(d);
+  const wa=nomorWA(k&&k.telepon);
+  const bisaFile = !!(navigator.canShare && (()=>{ try{ return navigator.canShare({files:[new File(['x'],'x.pdf',{type:'application/pdf'})]}); }catch(e){ return false; } })());
+  openModal({ title:'Bagikan '+TIPE[d.tipe].label.toLowerCase(), sub:d.nomor+(k?' · '+k.nama:''),
+    body:`<div class="grid" style="gap:13px">
+      ${bisaFile?`<div class="bagi-pdf">
+        <button class="btn btn-pri" data-act="bagiPDF" style="width:100%;justify-content:center">${ICON.doc} Kirim PDF ke WhatsApp, Telegram, Email…</button>
+        <span class="hint">Membuka menu bagikan di HP: pilih aplikasinya, PDF langsung terlampir bersama pesan di bawah.</span>
+      </div>`:''}
+      <div class="field"><label for="bagiPesan">Pesan</label>
+        <textarea id="bagiPesan" style="min-height:150px;font-size:13px">${esc(pesanDok(d,false))}</textarea>
+        <label class="chk" style="margin-top:6px"><input type="checkbox" id="bagiLengkap"> <span>Pakai rincian lengkap (semua item & total)</span></label>
+      </div>
+      <div class="grid g2" style="gap:10px">
+        <div class="field"><label for="bagiWA">Nomor WhatsApp</label><input type="tel" id="bagiWA" value="${esc(wa)}" placeholder="62812…"></div>
+        <div class="field"><label for="bagiEmail">Email</label><input type="email" id="bagiEmail" value="${esc(k&&k.email||'')}" placeholder="nama@contoh.com"></div>
+      </div>
+      <div class="bagi-tombol">
+        <button class="btn" data-act="bagiWA" style="color:#128C4A">WhatsApp</button>
+        <button class="btn" data-act="bagiEmail">Email</button>
+        <button class="btn" data-act="bagiTG" style="color:#1D7FB8">Telegram</button>
+        <button class="btn btn-ghost" data-act="bagiUnduh">${ICON.download||''} Unduh PDF</button>
+      </div>
+      <span class="hint">Tombol WhatsApp, Email, dan Telegram mengirim pesan teks. Lampirkan PDF-nya ${bisaFile?'lewat tombol hijau di atas':'dengan tombol Unduh PDF, lalu lampirkan berkasnya'}.</span>
+    </div>`,
+    ok:'Selesai', onOk(){} });
+  const cb=document.getElementById('bagiLengkap');
+  if(cb) cb.addEventListener('change',()=>{ document.getElementById('bagiPesan').value=pesanDok(d,cb.checked); });
+}
+async function aksiBagi(act){
+  const d=docOf(editId); if(!d) return;
+  const pesan=(document.getElementById('bagiPesan')||{}).value || pesanDok(d,false);
+  const subjek=TIPE[d.tipe].label+' '+d.nomor+(S.profil.nama?' — '+S.profil.nama:'');
+  if(act==='bagiWA'){
+    const n=nomorWA((document.getElementById('bagiWA')||{}).value);
+    window.open('https://wa.me/'+(n||'')+'?text='+encodeURIComponent(pesan),'_blank','noopener');
+    tandaiTerkirim(d); return;
+  }
+  if(act==='bagiEmail'){
+    const e=((document.getElementById('bagiEmail')||{}).value||'').trim();
+    window.open('mailto:'+encodeURIComponent(e).replace('%40','@')+'?subject='+encodeURIComponent(subjek)+'&body='+encodeURIComponent(pesan),'_blank');
+    tandaiTerkirim(d); return;
+  }
+  if(act==='bagiTG'){
+    window.open('https://t.me/share/url?url='+encodeURIComponent(subjek)+'&text='+encodeURIComponent(pesan),'_blank','noopener');
+    tandaiTerkirim(d); return;
+  }
+  if(act==='bagiPDF'||act==='bagiUnduh'){
+    toast('Menyiapkan PDF…');
+    let f;
+    try{ f=await buatPDF(d); }
+    catch(e){ toast('PDF belum bisa dibuat di sini (perlu internet sekali untuk memuat alat PDF). Pakai Cetak / PDF.'); return; }
+    if(act==='bagiPDF'){
+      try{ await navigator.share({files:[f], title:subjek, text:pesan}); tandaiTerkirim(d); }
+      catch(e){ if(e && e.name!=='AbortError') toast('Menu bagikan tidak terbuka. Coba Unduh PDF.'); }
+      return;
+    }
+    if(KEMAMPUAN.unduh){ try{ await KEMAMPUAN.unduh.save({filename:f.name, data:f}); toast('PDF diunduh: '+f.name); }catch(e){ toast('Unduhan gagal.'); } }
+    else toast('Unduhan tidak tersedia di tampilan ini.');
+  }
 }
 
 /* =======================================================
@@ -820,7 +987,9 @@ function load(){
       S.dokumen = Array.isArray(p.dokumen)?p.dokumen:[];
       if(!Array.isArray(S.profil.jenis)||!S.profil.jenis.length) S.profil.jenis=JENIS_BAWAAN.slice();
       S.urut = p.urut||{};
-      if(!S.jenisCfg || !Array.isArray(S.jenisCfg.jenis) || !Array.isArray(S.jenisCfg.bidang)){ S.jenisCfg=strukturDariLama(S.profil.jenis, S.pekerjaan); try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
+      if(!S.jenisCfg || !Array.isArray(S.jenisCfg.jenis) || !Array.isArray(S.jenisCfg.bidang)){ S.jenisCfg=strukturDariLama(S.profil.jenis, S.pekerjaan); }
+      migrasiBidang2(S.jenisCfg);
+      try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
       return;
     }catch(e){}
   }
@@ -2197,7 +2366,8 @@ function viewEditor(v){
           <div class="eyebrow">Pratinjau dokumen</div>
           <div style="display:flex;gap:7px">
             <button class="btn btn-sm" data-act="salin">${ICON.copy} Salin teks</button>
-            <button class="btn btn-sm btn-pri" data-act="cetak">${ICON.print} Cetak / PDF</button>
+            <button class="btn btn-sm" data-act="cetak">${ICON.print} Cetak / PDF</button>
+            <button class="btn btn-sm btn-pri" data-act="bagikan">${ICON.arrow} Bagikan</button>
           </div>
         </div>
         <div id="sheet"></div>
@@ -2247,6 +2417,11 @@ function renderEdCol(d){
           <label for="f_metode">${isKwitansi?'Diterima melalui':'Metode pembayaran'}</label>
           <input type="text" id="f_metode" data-f="metode" value="${esc(d.metode)}" placeholder="Transfer bank / tunai">
         </div>
+        ${daftarRekening().filter(r=>r.bank||r.nomor).length && !isKwitansi && !isSpk?`
+        <div class="field" style="grid-column:1/-1"><label>Rekening yang ditampilkan</label>
+          <div style="display:flex;gap:6px 14px;flex-wrap:wrap">${(()=>{ const ids=rekeningDok(d).map(r=>r.id);
+            return daftarRekening().filter(r=>r.bank||r.nomor).map(r=>`<label class="chk"><input type="checkbox" data-act="docRek" data-id="${r.id}" ${ids.indexOf(r.id)>=0?'checked':''}> <span>${esc(r.bank||'Rekening')} ${esc(r.nomor)}</span></label>`).join(''); })()}</div>
+        </div>`:''}
         ${isSpk?`
         <div class="field">
           <label for="f_mulai">Mulai pekerjaan</label>
@@ -2335,8 +2510,9 @@ function renderSheet(d){
   const p=S.profil, k=klienOf(d), t=TIPE[d.tipe], h=hitung(d);
   const bizMeta=[p.alamat,p.telepon,p.email,p.web,p.npwp?'NPWP '+p.npwp:''].filter(Boolean).join('\n');
   const klienMeta = k? [k.alamat,k.telepon,k.email].filter(Boolean).join('\n') : '';
-  const bayar = (p.bank||p.rekening)
-    ? `<div class="pay"><strong>Pembayaran</strong><br>${esc(p.bank)} ${esc(p.rekening)}${p.atasNama?' · a.n. '+esc(p.atasNama):''}${d.metode?'<br>Metode: '+esc(d.metode):''}</div>` : '';
+  const rk=rekeningDok(d);
+  const bayar = rk.length
+    ? `<div class="pay"><strong>Pembayaran</strong>${rk.map(r=>'<br>'+esc(r.bank)+' '+esc(r.nomor)+(r.atasNama?' · a.n. '+esc(r.atasNama):'')).join('')}${d.metode?'<br>Metode: '+esc(d.metode):''}</div>` : '';
 
   let isi='';
   if(d.tipe==='kwitansi'){
@@ -2454,7 +2630,7 @@ function docText(d){
   L.push('TOTAL    : '+fmtRp(h.total));
   if(h.dp){ L.push('Uang muka: −'+fmtRp(h.dp)); L.push('Sisa     : '+fmtRp(h.sisa)); }
   L.push('('+terbilang(h.dp?h.sisa:h.total)+')');
-  if(p.bank||p.rekening){ L.push(''); L.push('Pembayaran: '+[p.bank,p.rekening,p.atasNama?'a.n. '+p.atasNama:''].filter(Boolean).join(' ')); }
+  { const rk=rekeningDok(d); if(rk.length){ L.push(''); L.push('Pembayaran:'); rk.forEach(r=>L.push('• '+teksRek(r))); } }
   if(d.catatan){ L.push(''); L.push('Catatan: '+d.catatan); }
   if(d.syarat&&d.tipe!=='kwitansi'){ L.push(''); L.push('Syarat & ketentuan:'); L.push(d.syarat); }
   return L.join('\n');
@@ -2624,9 +2800,18 @@ function viewPengaturan(v){
         <div class="card">
           <div class="card-head"><h3>Pembayaran & tanda tangan</h3></div>
           <div class="card-pad grid g2" style="gap:13px">
-            <div class="field"><label>Bank</label><input type="text" data-p="bank" value="${esc(p.bank)}" placeholder="BCA"></div>
-            <div class="field"><label>Nomor rekening</label><input type="text" data-p="rekening" value="${esc(p.rekening)}"></div>
-            <div class="field" style="grid-column:1/-1"><label>Atas nama</label><input type="text" data-p="atasNama" value="${esc(p.atasNama)}"></div>
+            <div class="field" style="grid-column:1/-1"><label>Rekening & dompet digital</label>
+              <div class="grid" style="gap:8px">
+                ${daftarRekening().map(r=>`<div class="rek-row">
+                  <input type="text" data-rek="bank" data-id="${r.id}" value="${esc(r.bank)}" placeholder="BCA / DANA" aria-label="Bank">
+                  <input type="text" data-rek="nomor" data-id="${r.id}" value="${esc(r.nomor)}" placeholder="Nomor rekening" aria-label="Nomor rekening">
+                  <input type="text" data-rek="atasNama" data-id="${r.id}" value="${esc(r.atasNama)}" placeholder="Atas nama" aria-label="Atas nama">
+                  <label class="chk" style="white-space:nowrap" title="Otomatis tampil di dokumen baru"><input type="checkbox" data-rek="bawaan" data-id="${r.id}" ${r.bawaan?'checked':''}> <span>Bawaan</span></label>
+                  <button class="btn btn-ghost btn-sm" data-act="rekHapus" data-id="${r.id}" aria-label="Hapus rekening ${esc(r.bank)}" style="color:var(--danger)">${ICON.trash}</button>
+                </div>`).join('') || '<div class="hint">Belum ada rekening.</div>'}
+                <div><button class="btn btn-sm" data-act="rekTambah">${ICON.plus} Tambah rekening</button></div>
+                <span class="hint">Rekening bertanda <strong>Bawaan</strong> otomatis tampil di invoice. Di tiap dokumen Anda tetap bisa memilih rekening mana yang ditampilkan.</span>
+              </div></div>
             <div class="field"><label>Nama penanda tangan</label><input type="text" data-p="penandatangan" value="${esc(p.penandatangan)}"></div>
             <div class="field"><label>Jabatan</label><input type="text" data-p="jabatan" value="${esc(p.jabatan)}"></div>
           </div>
@@ -2814,8 +2999,9 @@ function viewJenis(v){
           <button class="btn btn-ghost btn-xs" data-act="bNaik" data-id="${b.id}" ${bi===0?'disabled':''} aria-label="Naikkan bidang ${esc(b.nama)}">↑</button>
           <button class="btn btn-ghost btn-xs" data-act="bTurun" data-id="${b.id}" ${bi===c.bidang.length-1?'disabled':''} aria-label="Turunkan bidang ${esc(b.nama)}">↓</button>
         </span>
-        <span class="jwarna" style="background:${b.warna}"></span>
-        <input type="text" class="jbnama" data-bd="${b.id}" value="${esc(b.nama)}" aria-label="Nama bidang">
+        <button class="jwarna jwarna-btn" data-act="bWarna" data-id="${b.id}" style="background:${b.warna}" title="Ganti warna bidang" aria-label="Ganti warna bidang ${esc(b.nama)}"></button>
+        <input type="text" class="jbnama" data-bd="${b.id}" value="${esc(b.nama)}" aria-label="Nama bidang ${esc(b.nama)}">
+        <button class="btn btn-ghost btn-xs" data-act="bUbah" data-id="${b.id}" title="Ubah nama bidang">✎ Ubah</button>
         <span class="hint" style="white-space:nowrap">${isi.length} jenis · ${tot} pekerjaan</span>
         <span style="flex:1"></span>
         ${isi.length?'':`<button class="btn btn-ghost btn-sm" data-act="bHapus" data-id="${b.id}" style="color:var(--danger)">Hapus bidang</button>`}
@@ -2902,6 +3088,11 @@ function aksiJenis(act, el){
     c.bidang.push(b); save(); render();
     const inp=document.querySelector(`[data-bd="${b.id}"]`); if(inp){ inp.focus(); inp.select(); }
     return true;
+  }
+  if(act==='bUbah'){ const inp=document.querySelector(`[data-bd="${id}"]`); if(inp){ inp.focus(); inp.select(); } return true; }
+  if(act==='bWarna'){
+    const b=bidangOf(id); if(!b) return true;
+    const i=WARNA_BIDANG.indexOf(b.warna); b.warna=WARNA_BIDANG[(i+1)%WARNA_BIDANG.length]; save(); render(); return true;
   }
   if(act==='bHapus'){
     const b=bidangOf(id); if(!b) return true;
@@ -3219,6 +3410,17 @@ document.addEventListener('click',function(e){
     return;
   }
   if(act==='salin'){ const d=docOf(editId); if(d) copyText(docText(d),'Teks dokumen tersalin.'); return; }
+  if(act==='bagikan'){ const d=docOf(editId); if(d) modalBagikan(d); return; }
+  if(act==='bagiWA'||act==='bagiEmail'||act==='bagiTG'||act==='bagiPDF'||act==='bagiUnduh'){ aksiBagi(act); return; }
+  if(act==='docRek'){
+    const d=docOf(editId); if(!d) return;
+    const ids=rekeningDok(d).map(r=>r.id).filter(x=>x!==id);
+    if(el.checked) ids.push(id);
+    d.rekeningIds=daftarRekening().map(r=>r.id).filter(x=>ids.indexOf(x)>=0);
+    save(); renderSheet(d); return;
+  }
+  if(act==='rekTambah'){ daftarRekening().push({id:uid(), bank:'', nomor:'', atasNama:S.profil.atasNama||'', bawaan:false}); save(); render(); return; }
+  if(act==='rekHapus'){ S.profil.rekeningList=daftarRekening().filter(r=>r.id!==id); save(); render(); toast('Rekening dihapus.'); return; }
   if(act==='itemBaru'){
     const d=docOf(editId); if(!d) return;
     d.items.push({id:uid(),desc:'',qty:1,satuan:'paket',harga:0}); save(); renderEdCol(d); renderSheet(d); return;
@@ -3276,6 +3478,7 @@ document.addEventListener('click',function(e){
           S.klien=Array.isArray(p.klien)?p.klien:[];
           S.pekerjaan=Array.isArray(p.pekerjaan)?p.pekerjaan:[];
           if(!S.jenisCfg||!Array.isArray(S.jenisCfg.jenis)||!Array.isArray(S.jenisCfg.bidang)) S.jenisCfg=strukturDariLama(S.profil.jenis,S.pekerjaan);
+          migrasiBidang2(S.jenisCfg);
           save(); go('beranda'); toast('Data berhasil dipulihkan.');
         }catch(err){ toast('Teks cadangan tidak dikenali. Pastikan tersalin lengkap.'); return false; }
       } });
@@ -3296,6 +3499,12 @@ document.addEventListener('input',function(e){
       const h=t.closest('.field').querySelector('.hint strong'); if(h) h.textContent=(t.value||'NRS').toUpperCase();
     }
     return;
+  }
+  if(t.dataset && t.dataset.rek){
+    const r=daftarRekening().find(x=>x.id===t.dataset.id); if(!r) return;
+    if(t.dataset.rek==='bawaan') r.bawaan=t.checked; else r[t.dataset.rek]=t.value;
+    const u=daftarRekening()[0]; if(u){ S.profil.bank=u.bank; S.profil.rekening=u.nomor; S.profil.atasNama=u.atasNama; }
+    save(); return;
   }
   if(route==='jenis' && t.dataset && t.dataset.jf==='tarif'){
     const j=JC().jenis.find(x=>x.id===jenisPilih); if(!j) return;
