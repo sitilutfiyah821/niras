@@ -1,0 +1,22 @@
+{
+  "id": "./",
+  "name": "Niras — Pelacak pekerjaan lepas",
+  "short_name": "Niras",
+  "description": "Pelacak pekerjaan lepas: tenggat, jam kerja, pembayaran, revisi, evaluasi, dan dokumen.",
+  "lang": "id",
+  "start_url": "./#beranda",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#FBF9F5",
+  "theme_color": "#0F5F4E",
+  "categories": ["productivity", "business"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Pekerjaan", "url": "./#pekerjaan", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Evaluasi", "url": "./#evaluasi", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

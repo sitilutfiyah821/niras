@@ -3,6 +3,12 @@
 <head>
 <meta charset="utf-8">
 <title>Niras</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0F5F4E">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Niras">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="Pelacak pekerjaan lepas: tenggat, jam kerja, pembayaran, dan jatah revisi. Plus penawaran, SPK, invoice, dan kwitansi. Data tersimpan di perangkat Anda.">
 <meta name="theme-color" content="#0F5F4E">
@@ -107,6 +113,8 @@ a:hover{text-decoration:underline}
 .g3{grid-template-columns:repeat(3,1fr)}
 .g2{grid-template-columns:repeat(2,1fr)}
 .g-main{grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);align-items:start}
+.ofa-row{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:12px 18px;border-top:1px solid var(--line)}
+.ofa-row:first-child{border-top:0}
 .g-jenis{grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr);align-items:start}
 .btn-xs{padding:1px 6px;font-size:12px;min-height:0;line-height:1.5}
 .jrow{display:grid;grid-template-columns:54px minmax(0,1fr) 110px 130px;align-items:center;gap:10px;padding:9px 16px 9px 10px;border-top:1px solid var(--line);font-size:13.5px;cursor:pointer}
@@ -648,6 +656,136 @@ function pindahkanPekerjaan(dari, ke){
   return n;
 }
 
+/* =======================================================
+   3d. Jembatan Niras ↔ One for All (Ofa)
+   Keduanya tinggal di sitilutfiyah821.github.io, jadi berbagi penyimpanan perangkat.
+   Aturannya: tiap app hanya MENULIS kuncinya sendiri dan hanya MEMBACA kunci app lain,
+   supaya tidak saling menimpa.
+   - Niras menulis 'niras-ke-ofa-v1' : tenggat pekerjaan + centang tahapan yang berasal dari Ofa
+   - Ofa  menulis 'ofa-data-v1'      : semua jadwal Ofa (Niras hanya membaca)
+   ======================================================= */
+const OFA_KEY='ofa-data-v1', JEMBATAN_KEY='niras-ke-ofa-v1';
+const OFA_URL='https://sitilutfiyah821.github.io/one-for-all/';
+function ofaState(){ if(!S.ofa || typeof S.ofa!=='object') S.ofa={ditangani:{}, centang:{}}; S.ofa.ditangani=S.ofa.ditangani||{}; S.ofa.centang=S.ofa.centang||{}; return S.ofa; }
+function bacaOfa(){
+  try{ const d=JSON.parse(localStorage.getItem(OFA_KEY)||'null'); return d && Array.isArray(d.tasks) ? d : null; }
+  catch(e){ return null; }
+}
+const ofaProyekNiras = d => (d.projects||[]).find(p=>p.id==='niras') || (d.projects||[]).find(p=>/niras/i.test(p.name||''));
+/* jadwal Ofa di proyek Niras yang belum diurus di Niras */
+function kotakOfa(){
+  const d=bacaOfa(); if(!d) return {ada:false, list:[]};
+  const p=ofaProyekNiras(d); if(!p) return {ada:true, list:[]};
+  const st=ofaState();
+  const list=d.tasks.filter(t=>t.projectId===p.id && !t.dariNiras && !t.skipped && !st.ditangani[t.id])
+    .sort((a,b)=>((a.date||'')+(a.time||'')).localeCompare((b.date||'')+(b.time||'')));
+  return {ada:true, list};
+}
+function versiTenggat(o){ return [o.judul,o.tanggal,o.catatan,o.selesai?1:0].join('|'); }
+/* tulis tenggat pekerjaan untuk dibaca Ofa */
+function kirimKeOfa(){
+  if(S.contoh) { try{ localStorage.removeItem(JEMBATAN_KEY); }catch(e){} return; }
+  const batas=addDays(today(),-30);
+  const tenggat=S.pekerjaan.filter(k=>k.tenggat && k.status!=='batal' && k.status!=='prospek'
+      && (AKTIF.indexOf(k.status)>=0 || (k.status==='selesai' && (k.selesaiTgl||k.tenggat)>=batas)))
+    .map(k=>{
+      const kl=klienOf(k);
+      const o={ id:k.id, judul:'Tenggat: '+(k.judul||'Pekerjaan')+(kl?' · '+kl.nama:''), tanggal:k.tenggat,
+        catatan:[k.jenis||'', kl&&kl.nama?'Klien: '+kl.nama:''].filter(Boolean).join(' · '),
+        selesai:k.status==='selesai', gantikan:k.dariOfa||null };
+      o.versi=versiTenggat(o); return o;
+    });
+  const isi={v:1, diperbarui:new Date().toISOString(), tenggat, centang:ofaState().centang};
+  try{ localStorage.setItem(JEMBATAN_KEY, JSON.stringify(isi)); }catch(e){}
+}
+/* bawa centang dari Ofa ke tahapan yang ditempel */
+function tarikDariOfa(){
+  const d=bacaOfa(); if(!d) return false;
+  const st=ofaState(), diterapkan=d.nirasCentang||{};
+  let ubah=false;
+  S.pekerjaan.forEach(k=>(k.tahapan||[]).forEach(th=>{
+    if(!th.ofaId) return;
+    const ot=d.tasks.find(t=>t.id===th.ofaId); if(!ot) return;
+    const tunda=st.centang[th.ofaId];
+    if(tunda && (diterapkan[th.ofaId]||'')<tunda.waktu) return;   /* perubahan dari Niras belum dibaca Ofa */
+    if(!!ot.done!==!!th.selesai){ th.selesai=!!ot.done; ubah=true; }
+  }));
+  return ubah;
+}
+function tglOfa(t){ return t.date? fmtDateShort(t.date)+(t.time?' · '+String(t.time).replace(':','.'):'') : 'Tanpa tanggal'; }
+function htmlKotakOfa(){
+  const kb=kotakOfa();
+  if(!kb.ada || !kb.list.length) return '';
+  return `<div class="card noprint" style="margin-bottom:16px;border-color:#F3C9C0">
+    <div class="card-head" style="background:#FFF4F1">
+      <h3>Dari Ofa <span class="pill" style="background:#FFE1DC;color:#8A2E22;border-color:#F7C3BA;margin-left:6px">${kb.list.length}</span></h3>
+      <a class="hint" href="${OFA_URL}" target="_blank" rel="noopener">Buka One for All ↗</a>
+    </div>
+    <div>${kb.list.slice(0,8).map(t=>`
+      <div class="ofa-row">
+        <div style="min-width:0;flex:1">
+          <div style="font-weight:600;font-size:14px">${t.done?'<span style="color:var(--green)">✓</span> ':''}${esc(t.title||'Tanpa judul')}</div>
+          <div class="hint" style="margin-top:2px">${esc(tglOfa(t))}${t.note?' · '+esc(String(t.note).slice(0,90)):''}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-sm btn-pri" data-act="ofaJadikan" data-id="${esc(t.id)}">${ICON.plus} Pekerjaan baru</button>
+          <button class="btn btn-sm" data-act="ofaTempel" data-id="${esc(t.id)}">Tempel ke pekerjaan…</button>
+          <button class="btn btn-sm btn-ghost" data-act="ofaAbaikan" data-id="${esc(t.id)}">Abaikan</button>
+        </div>
+      </div>`).join('')}
+      ${kb.list.length>8?`<div class="hint" style="padding:10px 18px">dan ${kb.list.length-8} jadwal lainnya</div>`:''}
+    </div>
+  </div>`;
+}
+function aksiOfa(act, el){
+  const id=el.dataset.id, d=bacaOfa(); const t=d && d.tasks.find(x=>x.id===id);
+  const st=ofaState();
+  if(!t){ toast('Jadwal itu sudah tidak ada di Ofa.'); st.ditangani[id]={aksi:'hilang'}; save(); render(); return; }
+  if(act==='ofaAbaikan'){
+    st.ditangani[id]={aksi:'abaikan', waktu:new Date().toISOString()}; save(); render();
+    toast('Disembunyikan dari Niras. Jadwalnya tetap ada di Ofa.'); return;
+  }
+  if(act==='ofaJadikan'){
+    const k=newKerja();
+    k.judul=t.title||''; if(t.date) k.tenggat=t.date; k.catatan=t.note||''; k.dariOfa=t.id;
+    if(t.link) k.tautan=t.link;
+    S.pekerjaan.unshift(k);
+    st.ditangani[id]={aksi:'pekerjaan', kerjaId:k.id, waktu:new Date().toISOString()};
+    save(); openKerja(k.id);
+    toast('Pekerjaan dibuat dari jadwal Ofa. Lengkapi klien dan nilainya.'); return;
+  }
+  if(act==='ofaTempel'){
+    const aktif=S.pekerjaan.filter(k=>AKTIF.indexOf(k.status)>=0 || k.status==='prospek');
+    if(!aktif.length){ toast('Belum ada pekerjaan aktif. Pakai "Pekerjaan baru".'); return; }
+    openModal({ title:'Tempel ke pekerjaan', sub:'Jadwal ini masuk ke tahapan pekerjaan yang Anda pilih. Mencentangnya di Ofa atau di Niras akan saling mengikuti.',
+      body:`<div class="grid" style="gap:12px;font-size:13.5px">
+        <div class="pill p-grey" style="font-size:12.5px;justify-self:start">${esc(t.title||'')} · ${esc(tglOfa(t))}</div>
+        <div class="field"><label for="ofaKe">Pekerjaan</label>
+          <select id="ofaKe">${aktif.map(k=>{const kl=klienOf(k);return `<option value="${k.id}">${esc(k.judul||'Tanpa judul')}${kl?' · '+esc(kl.nama):''}</option>`;}).join('')}</select></div>
+      </div>`,
+      ok:'Tempel',
+      onOk(){
+        const k=kerjaOf(document.getElementById('ofaKe').value); if(!k) return false;
+        k.tahapan=k.tahapan||[];
+        k.tahapan.push({id:uid(), nama:(t.title||'Jadwal Ofa')+(t.date?' ('+fmtDateShort(t.date)+')':''), selesai:!!t.done, ofaId:t.id});
+        st.ditangani[id]={aksi:'tempel', kerjaId:k.id, waktu:new Date().toISOString()};
+        save(); render(); toast('Ditempel ke "'+(k.judul||'pekerjaan')+'".');
+      }});
+    return;
+  }
+}
+/* app lain menulis ke penyimpanan → segarkan */
+window.addEventListener('storage', e=>{
+  if(e.key!==OFA_KEY) return;
+  if(tarikDariOfa()) save();
+  if(route==='beranda' || route==='kerja') render();
+});
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState!=='visible') return;
+  if(tarikDariOfa()) save();
+  if(route==='beranda' || route==='kerja') render();
+});
+
 
 /* =======================================================
    4. Penyimpanan
@@ -693,6 +831,7 @@ function load(){
 function save(){
   try{ localStorage.setItem(KEY,JSON.stringify(S)); }
   catch(e){ toast('Gagal menyimpan ke perangkat — ruang penyimpanan penuh atau diblokir.'); }
+  try{ kirimKeOfa(); }catch(e){}
   renderFoot();
 }
 function seed(){
@@ -1188,6 +1327,7 @@ function head(title,sub,actions){
 }
 function render(){
   route = (location.hash.replace('#','')||'beranda');
+  if(route.indexOf('kerja/')===0){ kerjaId=route.slice(6); route='kerja'; try{ history.replaceState(null,'','#kerja'); }catch(e){} }
   if(!ROUTES.some(r=>r.h===route) && !INDUK[route]) route='beranda';
   if(route==='editor' && !docOf(editId)) route='dokumen';
   if(route==='kerja' && !kerjaOf(kerjaId)) route='pekerjaan';
@@ -1289,6 +1429,8 @@ function viewBeranda(v){
       <div style="font-size:13.5px;color:#5A3A18"><strong>Ini data contoh</strong> supaya Anda bisa melihat cara kerjanya. Hapus kapan saja, lalu isi dengan data sendiri.</div>
       <button class="btn btn-sm" data-act="hapusContoh">${ICON.trash} Hapus data contoh</button>
     </div>`:''}
+
+    ${htmlKotakOfa()}
 
     ${jalan?`<div class="card card-pad noprint" style="display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:16px;background:var(--accent-tint);border-color:#CFE0DB">
       <div style="min-width:0">
@@ -1571,7 +1713,7 @@ function viewKerja(v){
             ${(k.tahapan||[]).map(t=>`
               <label class="chk ${t.selesai?'done':''}">
                 <input type="checkbox" data-tahap="${t.id}" ${t.selesai?'checked':''}>
-                <span class="cx">${esc(t.nama)}</span>
+                <span class="cx">${esc(t.nama)}${t.ofaId?' <span class="pill" style="background:#FFE1DC;color:#8A2E22;border-color:#F7C3BA;font-size:10.5px;padding:1px 7px">Ofa</span>':''}</span>
                 <button class="rm" data-act="tahapHapus" data-i="${t.id}" title="Hapus tahap">${ICON.trash}</button>
               </label>`).join('') || `<div style="font-size:13px;color:var(--muted);padding:4px 2px">Belum ada tahapan.</div>`}
             <div style="display:flex;gap:7px;margin-top:10px">
@@ -2886,6 +3028,9 @@ document.addEventListener('click',function(e){
   if(act==='modalTutup'){ closeModal(); return; }
   if(act==='modalOk'){ const fn=modalOk; if(fn && fn()!==false) closeModal(); return; }
 
+  /* ---- jadwal dari Ofa ---- */
+  if(act==='ofaJadikan'||act==='ofaTempel'||act==='ofaAbaikan'){ aksiOfa(act, el); return; }
+
   /* ---- jenis pekerjaan & kalender ---- */
   if(route==='jenis' && aksiJenis(act, el)) return;
   if(act==='gcalSinkron'){ const k=kerjaOf(kerjaId); if(k){ const p=sinkronKalender(k); segarkanGcal(k); } return; }
@@ -3222,6 +3367,7 @@ document.addEventListener('change',function(e){
     const k=kerjaOf(kerjaId); if(!k) return;
     const th=(k.tahapan||[]).find(x=>x.id===t.dataset.tahap); if(!th) return;
     th.selesai=t.checked;
+    if(th.ofaId) ofaState().centang[th.ofaId]={done:th.selesai, waktu:new Date().toISOString()};
     const pr=progresKerja(k);
     if(pr.total && pr.done===pr.total && AKTIF.indexOf(k.status)>=0){ k.status='selesai'; tandaiSelesai(k); jadwalkanGcal(k); }
     save(); render(); return;
@@ -3271,6 +3417,11 @@ document.addEventListener('keydown',function(e){
    ======================================================= */
 load();
 if(!location.hash) location.hash='#beranda';
+try{ if(tarikDariOfa()) save(); else kirimKeOfa(); }catch(e){}
+/* pasang sebagai aplikasi (hanya di situs GitHub Pages, bukan di dalam Claude) */
+if('serviceWorker' in navigator && /github\.io$/.test(location.hostname)){
+  window.addEventListener('load', ()=>{ navigator.serviceWorker.register('sw.js').catch(()=>{}); });
+}
 render();
 })();
 </script>
