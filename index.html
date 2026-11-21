@@ -165,8 +165,17 @@ img.hilang{background:repeating-linear-gradient(45deg,var(--surface-2),var(--sur
 .seg-r input{accent-color:var(--accent)}
 .swatch{width:24px;height:24px;border-radius:6px;border:2px solid transparent;cursor:pointer;padding:0}
 .swatch.on{border-color:var(--ink);box-shadow:0 0 0 2px #fff inset}
-.akun-row{display:grid;grid-template-columns:110px minmax(0,1fr) minmax(0,1fr) 110px auto auto;gap:6px;align-items:center}
-@media (max-width:760px){.akun-row{grid-template-columns:1fr 1fr}.kat-nama{font-size:21px}.kat-isi,.kat-band{padding:14px 16px}.feed-grid{grid-template-columns:repeat(3,1fr)}}
+.g-kat{grid-template-columns:minmax(260px,.85fr) minmax(0,1.4fr);align-items:start}
+.akun-kartu{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--surface-2);display:grid;gap:8px}
+.akun-b1{display:grid;grid-template-columns:minmax(110px,.8fr) minmax(0,1.4fr) auto;gap:8px;align-items:end}
+.akun-b2{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(110px,.8fr) auto;gap:8px;align-items:end}
+.akun-sel{display:flex;flex-direction:column;gap:3px;min-width:0}
+.akun-sel>span{font-size:11px;font-weight:600;color:var(--muted)}
+.akun-sel input,.akun-sel select{width:100%;min-width:0;background-color:#fff}
+.akun-hapus{color:var(--danger);height:38px}
+.akun-tampil{white-space:nowrap;height:38px;align-items:center}
+.seg:has(.seg-r){flex-wrap:wrap}
+@media (max-width:760px){.g-kat{grid-template-columns:1fr}.akun-b2{grid-template-columns:1fr 1fr}.akun-tampil{grid-column:1/-1;height:auto}.kat-nama{font-size:21px}.kat-isi,.kat-band{padding:14px 16px}.feed-grid{grid-template-columns:repeat(3,1fr)}}
 .ofa-row{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:12px 18px;border-top:1px solid var(--line)}
 .ofa-row:first-child{border-top:0}
 .g-jenis{grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr);align-items:start}
@@ -411,7 +420,7 @@ td.r,th.r{text-align:right}
   .topbar{padding:18px 16px 14px;flex-direction:column;align-items:stretch;gap:12px}
   .bar-actions{justify-content:flex-start}
   .view{padding:18px 16px 96px}
-  .g4,.g3,.g2,.g-main,.g-set,.g-jenis{grid-template-columns:1fr}
+  .g4,.g3,.g2,.g-main,.g-set,.g-jenis,.g-kat{grid-template-columns:1fr}
   .jrow{grid-template-columns:54px minmax(0,1fr) 92px}
   .jrow > :nth-child(4){display:none}
   .topbar h1{font-size:22px}
@@ -1589,7 +1598,7 @@ function viewKategori(v){
   const c=katOf(katPilih);
   head('Atur kategori', `<a href="#arsip">← Arsip</a> · Nama, tata letak, dan warna tiap kategori portofolio`, `<button class="btn btn-pri" data-act="katBaru">${ICON.plus} Kategori</button>`);
   const n=id=>daftarKarya().filter(x=>x.katId===id).length;
-  v.innerHTML=`<div class="grid g-jenis">
+  v.innerHTML=`<div class="grid g-kat">
     <div class="card">${kat.map((kc,i)=>`<div class="jrow ${kc.id===katPilih?'on':''}" data-act="katPilih" data-id="${kc.id}" style="grid-template-columns:54px 14px minmax(0,1fr) 120px">
         <span class="jgeser"><button class="btn btn-ghost btn-xs" data-act="katNaik" data-id="${kc.id}" ${i===0?'disabled':''} aria-label="Naikkan">↑</button><button class="btn btn-ghost btn-xs" data-act="katTurun" data-id="${kc.id}" ${i===kat.length-1?'disabled':''} aria-label="Turunkan">↓</button></span>
         <span class="jwarna" style="background:${kc.warna}"></span>
@@ -1605,14 +1614,18 @@ function viewKategori(v){
           <input type="text" data-kt="warna" value="${esc(c.warna)}" style="width:96px" aria-label="Kode warna"></div></div>
         <div class="field"><label>Gaya judul</label><div class="seg">${Object.entries(GAYA_JUDUL).map(([g,l])=>`<label class="seg-r"><input type="radio" name="ktJudul" data-kt="judul" value="${g}" ${c.judul===g?'checked':''}> <span style="${fontJudul(g)}">${l}</span></label>`).join('')}</div></div>
         ${c.tata==='feed'?`<div class="field"><label>Akun media sosial</label>
-          <div class="grid" style="gap:7px">${(c.akun||[]).map(a=>`<div class="akun-row">
-            <select data-akun="platform" data-id="${a.id}" aria-label="Platform">${PLATFORM.map(p=>`<option ${a.platform===p?'selected':''}>${p}</option>`).join('')}</select>
-            <input type="text" data-akun="handle" data-id="${a.id}" value="${esc(a.handle||'')}" placeholder="@akun" aria-label="Nama akun">
-            <input type="text" data-akun="peran" data-id="${a.id}" value="${esc(a.peran||'')}" placeholder="Peran: desain feed" aria-label="Peran">
-            <select data-akun="tata" data-id="${a.id}" aria-label="Tata letak akun">${Object.entries(TATA_AKUN).map(([t,l])=>`<option value="${t}" ${a.tata===t?'selected':''}>${l}</option>`).join('')}</select>
-            <label class="chk" title="Tampil di PDF"><input type="checkbox" data-akun="tampil" data-id="${a.id}" ${a.tampil===false?'':'checked'}> <span>Tampil</span></label>
-            <button class="btn btn-ghost btn-sm" data-act="akunHapus" data-id="${a.id}" aria-label="Hapus akun" style="color:var(--danger)">${ICON.trash}</button>
-          </div>`).join('')||'<span class="hint">Belum ada akun.</span>'}
+          <div class="grid" style="gap:9px">${(c.akun||[]).map((a,i)=>`<div class="akun-kartu">
+            <div class="akun-b1">
+              <label class="akun-sel"><span>Platform</span><select data-akun="platform" data-id="${a.id}">${PLATFORM.map(p=>`<option ${a.platform===p?'selected':''}>${p}</option>`).join('')}</select></label>
+              <label class="akun-sel"><span>Nama akun</span><input type="text" data-akun="handle" data-id="${a.id}" value="${esc(a.handle||'')}" placeholder="@namaakun" autocapitalize="off" spellcheck="false"></label>
+              <button class="btn btn-ghost btn-sm akun-hapus" data-act="akunHapus" data-id="${a.id}" aria-label="Hapus akun ${esc(a.handle||String(i+1))}" title="Hapus akun">${ICON.trash}</button>
+            </div>
+            <div class="akun-b2">
+              <label class="akun-sel"><span>Peran Anda</span><input type="text" data-akun="peran" data-id="${a.id}" value="${esc(a.peran||'')}" placeholder="mis. desain feed mingguan"></label>
+              <label class="akun-sel"><span>Tampilan</span><select data-akun="tata" data-id="${a.id}">${Object.entries(TATA_AKUN).map(([t,l])=>`<option value="${t}" ${a.tata===t?'selected':''}>${l}</option>`).join('')}</select></label>
+              <label class="chk akun-tampil" title="Ikut masuk PDF portofolio"><input type="checkbox" data-akun="tampil" data-id="${a.id}" ${a.tampil===false?'':'checked'}> <span>Masuk PDF</span></label>
+            </div>
+          </div>`).join('')||'<span class="hint">Belum ada akun. Tambahkan akun yang feed-nya Anda desain.</span>'}
           <div><button class="btn btn-sm" data-act="akunBaru">${ICON.plus} Tambah akun</button></div></div></div>`:''}
         <label class="chk"><input type="checkbox" data-kt="tampil" ${c.tampil===false?'':'checked'}> <span>Tampilkan kategori ini di PDF portofolio</span></label>
         <div style="border-top:1px solid var(--line);padding-top:12px"><button class="btn btn-sm btn-ghost" data-act="katHapus" style="color:var(--danger)">${ICON.trash} Hapus kategori…</button></div>
