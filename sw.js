@@ -1,7 +1,7 @@
 /* Niras — service worker: supaya bisa dipasang di HP dan dibuka tanpa internet.
    Naikkan angka VERSI setiap kali index.html diubah supaya HP mengambil versi terbaru. */
-const VERSI = 'niras-v9';
-const SHELL = ['./', 'index.html', 'dilan.js?v=5', 'manifest.webmanifest',
+const VERSI = 'niras-v10';
+const SHELL = ['./', 'index.html', 'dilan.js?v=6', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', (event) => {
